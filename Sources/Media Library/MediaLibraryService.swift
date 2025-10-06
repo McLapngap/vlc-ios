@@ -154,6 +154,9 @@ class MediaLibraryService: NSObject {
     private(set) var observable = VLCObservable<MediaLibraryObserver>()
 
     private(set) lazy var medialib = VLCMediaLibrary()
+    
+    // Folder-based playlist service
+    private var folderPlaylistService: FolderPlaylistService?
 
     @objc weak var deviceBackupDelegate: MediaLibraryDeviceBackupDelegate?
     @objc weak var hidingDelegate: MediaLibraryHidingDelegate?
@@ -165,6 +168,10 @@ class MediaLibraryService: NSObject {
         super.init()
         setupMediaLibrary()
         medialib.delegate = self
+        
+        // Initialize folder-based playlist service
+        folderPlaylistService = FolderPlaylistService(mediaLibraryService: self)
+        
         NotificationCenter.default.addObserver(self, selector: #selector(reload),
                                                name: .VLCNewFileAddedNotification, object: nil)
         
@@ -224,6 +231,12 @@ private extension MediaLibraryService {
 
         medialib.reload()
         medialib.discover(onEntryPoint: "file://" + path)
+        
+        // Scan existing folders for playlist creation after a short delay
+        // to ensure the media library has finished initial discovery
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.scanExistingFoldersForPlaylists()
+        }
     }
 
     private func setupMediaLibrary() {
@@ -420,6 +433,17 @@ private extension MediaLibraryService {
 
         _ = try? FileManager.default.removeItem(atPath: targetPath)
         _ = try? FileManager.default.copyItem(atPath: databasePath, toPath: targetPath)
+    }
+    
+    /// Scans existing folders in the document directory and creates playlists for them
+    @objc func scanExistingFoldersForPlaylists() {
+        folderPlaylistService?.scanExistingFolders()
+    }
+    
+    /// Manually triggers folder scanning for playlist creation
+    /// This can be called to refresh playlists from existing folders
+    @objc func refreshFolderPlaylists() {
+        folderPlaylistService?.scanExistingFolders()
     }
 }
 
