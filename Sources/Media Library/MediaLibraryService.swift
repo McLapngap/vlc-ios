@@ -160,6 +160,8 @@ class MediaLibraryService: NSObject {
 
     @objc var isExcludingFromBackup: Bool = false
     @objc var isHidingLibrary: Bool = false
+    
+    private(set) lazy var folderPlaylistManager = FolderPlaylistManager(mediaLibraryService: self)
 
     override init() {
         super.init()
@@ -235,6 +237,11 @@ private extension MediaLibraryService {
         // TODO: fahri - verify the documentPath for watchOS later.
         /// Can't verify now, will verify after fully developing the media library features
         setupMediaDiscovery(at: documentPath)
+        
+        // Schedule initial folder scanning after a delay to ensure media library is ready
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            self?.scanExistingFoldersForPlaylists()
+        }
 
         let databasePath = libraryPath + "/MediaLibrary/" + MediaLibraryService.databaseName
         let thumbnailPath = libraryPath + "/MediaLibrary/Thumbnails"
@@ -284,6 +291,38 @@ private extension MediaLibraryService {
 @objc extension MediaLibraryService {
     @objc func reload() {
         medialib.reload()
+    }
+    
+    /// Scans existing folders in the documents directory and creates playlists for them
+    private func scanExistingFoldersForPlaylists() {
+        guard let documentPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first else {
+            return
+        }
+        
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self = self else { return }
+            
+            do {
+                let fileManager = FileManager.default
+                let contents = try fileManager.contentsOfDirectory(atPath: documentPath)
+                
+                for item in contents {
+                    let itemPath = (documentPath as NSString).appendingPathComponent(item)
+                    var isDirectory: ObjCBool = false
+                    
+                    if fileManager.fileExists(atPath: itemPath, isDirectory: &isDirectory) && isDirectory.boolValue {
+                        // Check if this folder should have a playlist
+                        if self.folderPlaylistManager.shouldCreatePlaylistForFolder(at: itemPath) {
+                            DispatchQueue.main.async {
+                                self.folderPlaylistManager.createPlaylistFromFolder(at: itemPath)
+                            }
+                        }
+                    }
+                }
+            } catch {
+                APLog("Error scanning existing folders: \(error.localizedDescription)")
+            }
+        }
     }
 
     @objc func forceRescan() {
@@ -517,6 +556,29 @@ extension MediaLibraryService: VLCMediaFileDiscovererDelegate {
     func mediaFileAdded(_ filePath: String!, loading isLoading: Bool) {
         guard !isLoading else {
             return
+        }
+        
+        // Check if the added path is a folder and create playlist if needed
+        if let filePath = filePath {
+            let fullPath: String
+            if let documentPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first {
+                fullPath = documentPath + "/" + filePath
+            } else {
+                fullPath = filePath
+            }
+            
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDirectory) {
+                if isDirectory.boolValue {
+                    // This is a folder, check if we should create a playlist for it
+                    if folderPlaylistManager.shouldCreatePlaylistForFolder(at: fullPath) {
+                        folderPlaylistManager.createPlaylistFromFolder(at: fullPath)
+                    }
+                } else {
+                    // This is a file, check if it's in a folder that has a playlist
+                    folderPlaylistManager.updatePlaylistForNewFile(at: fullPath)
+                }
+            }
         }
 
         reload()
