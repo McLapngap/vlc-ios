@@ -129,7 +129,7 @@ class AutoPlaylistService: NSObject {
             
             if FileManager.default.fileExists(atPath: filePath, isDirectory: &isDirectory) {
                 if isDirectory.boolValue {
-                    // Recursively scan subdirectories
+                    // Recursively scan subdirectories (limit depth to prevent infinite loops)
                     let subfolderFiles = getMediaFilesInFolder(at: filePath)
                     for subFile in subfolderFiles {
                         mediaFiles.append((file as NSString).appendingPathComponent(subFile))
@@ -144,17 +144,8 @@ class AutoPlaylistService: NSObject {
     }
     
     private func isMediaFile(fileName: String) -> Bool {
-        // Use the same supported formats as defined in VLCConstants.h
-        let supportedVideoExtensions = [
-            "669", "3g2", "3gp", "3gp2", "3gpp", "amv", "asf", "avi", "bik", "bin", "crf", "divx", "drc", "dv", "evo", "f4v", "far", "flv", "gvi", "gxf", "hevc", "iso", "it", "m1v", "m2v", "m2t", "m2ts", "m4v", "mkv", "mov", "mp2", "mp2v", "mp4", "mp4v", "mpe", "mpeg", "mpeg1", "mpeg2", "mpeg4", "mpg", "mpv2", "mtm", "mts", "mtv", "mxf", "mxg", "nsv", "nuv", "ogg", "ogm", "ogv", "ogx", "ps", "rec", "rm", "rmvb", "rpl", "s3m", "thp", "tod", "ts", "tts", "txd", "vlc", "vob", "vro", "webm", "wm", "wmv", "wtv", "xesc", "xm"
-        ]
-        
-        let supportedAudioExtensions = [
-            "3ga", "669", "a52", "aa3", "aac", "ac3", "adt", "adts", "aif", "aifc", "aiff", "amb", "amr", "aob", "ape", "at3", "au", "awb", "caf", "dts", "flac", "it", "kar", "m4a", "m4b", "m4p", "m5p", "mid", "mka", "mlp", "mod", "mpa", "mp1", "mp2", "mp3", "mpc", "mpga", "mus", "oga", "ogg", "oma", "opus", "qcp", "ra", "rmi", "s3m", "sid", "spx", "tak", "thd", "tta", "voc", "vqf", "w64", "wav", "wma", "wv", "xa", "xm"
-        ]
-        
-        let fileExtension = (fileName as NSString).pathExtension.lowercased()
-        return supportedVideoExtensions.contains(fileExtension) || supportedAudioExtensions.contains(fileExtension)
+        // Use the existing NSString extension methods that are consistent with VLC's supported formats
+        return (fileName as NSString).isSupportedMediaFormat() || (fileName as NSString).isSupportedAudioMediaFormat()
     }
     
     private func createPlaylistForFolder(named folderName: String, mediaFiles: [String]) {
