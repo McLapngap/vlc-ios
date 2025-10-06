@@ -161,6 +161,8 @@ class MediaLibraryService: NSObject {
     @objc var isExcludingFromBackup: Bool = false
     @objc var isHidingLibrary: Bool = false
 
+    private(set) lazy var autoPlaylistService = AutoPlaylistService(mediaLibraryService: self)
+
     override init() {
         super.init()
         setupMediaLibrary()
@@ -402,6 +404,14 @@ private extension MediaLibraryService {
         }
     }
 
+    @objc func scanForFolderPlaylists() {
+        autoPlaylistService.scanForFolderPlaylists()
+    }
+    
+    @objc func resetAutoPlaylistProcessedFolders() {
+        autoPlaylistService.resetAllProcessedFolders()
+    }
+
     @objc func exportMediaLibrary() {
         guard let documentPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first,
             let libraryPath = NSSearchPathForDirectoriesInDomains(.libraryDirectory, .userDomainMask, true).first else {
@@ -442,6 +452,9 @@ private extension MediaLibraryService {
             DispatchQueue.main.async {
                 // Reload in order to make sure that there is no old artifacts left
                 self.reload()
+                
+                // Check for new folders that might need playlists
+                self.autoPlaylistService.scanForFolderPlaylists()
             }
         }
     }
@@ -501,6 +514,14 @@ extension MediaLibraryService {
                    desc: Bool = false) -> [VLCMLPlaylist] {
         return medialib.playlists(with: sort, desc: desc) ?? []
     }
+    
+    @objc func scanForFolderPlaylists() {
+        autoPlaylistService.scanForFolderPlaylists()
+    }
+    
+    @objc func resetAutoPlaylistCache() {
+        autoPlaylistService.resetAllProcessedFolders()
+    }
 }
 
 // MARK: - Genre methods
@@ -520,6 +541,11 @@ extension MediaLibraryService: VLCMediaFileDiscovererDelegate {
         }
 
         reload()
+        
+        // Trigger automatic playlist creation for folders when new files are added
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            self?.autoPlaylistService.scanForFolderPlaylists()
+        }
     }
 
     func mediaFileDeleted(_ filePath: String!) {
@@ -720,6 +746,9 @@ extension MediaLibraryService {
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didCompleteDiscovery entryPoint: String) {
         didFinishDiscovery = true
+        
+        // Trigger automatic playlist creation from folders
+        autoPlaylistService.scanForFolderPlaylists()
     }
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didProgressDiscovery entryPoint: String) {
