@@ -167,6 +167,11 @@ class MediaLibraryService: NSObject {
         medialib.delegate = self
         NotificationCenter.default.addObserver(self, selector: #selector(reload),
                                                name: .VLCNewFileAddedNotification, object: nil)
+        #if !os(watchOS)
+        // Also react to foreground to refresh folder playlists
+        NotificationCenter.default.addObserver(self, selector: #selector(syncFolderPlaylistsFromTopLevelFoldersNotification),
+                                               name: UIApplication.willEnterForegroundNotification, object: nil)
+        #endif
         
         #if !os(watchOS)
         NotificationCenter.default.addObserver(self, selector: #selector(handleWillEnterForegroundNotification),
@@ -421,6 +426,11 @@ private extension MediaLibraryService {
         _ = try? FileManager.default.removeItem(atPath: targetPath)
         _ = try? FileManager.default.copyItem(atPath: databasePath, toPath: targetPath)
     }
+
+    // Expose a selector-compatible wrapper for notification
+    @objc func syncFolderPlaylistsFromTopLevelFoldersNotification() {
+        syncFolderPlaylistsFromTopLevelFolders()
+    }
 }
 
 // MARK: - Application notifications
@@ -543,6 +553,8 @@ extension MediaLibraryService: VLCMediaLibraryDelegate {
             $0.medialibrary?(self, didAddVideos: videos)
             $0.medialibrary?(self, didAddTracks: tracks)
         }
+        // Keep folder-based playlists in sync when new media is added
+        syncFolderPlaylistsFromTopLevelFolders()
     }
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didModifyMediaWithIds mediaIds: [NSNumber]) {
@@ -591,6 +603,72 @@ extension MediaLibraryService: VLCMediaLibraryDelegate {
         observable.notifyObservers {
             $0.medialibrary?(self, thumbnailReady: media,
                              type: type, success: success)
+        }
+    }
+}
+
+// MARK: - Folder-based playlists
+extension MediaLibraryService {
+    // Create/update playlists named after top-level folders in Documents
+    // Each playlist contains all playable media inside that folder (recursively)
+    fileprivate func syncFolderPlaylistsFromTopLevelFolders() {
+        guard let documentsPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first else {
+            return
+        }
+
+        let documentsURL = URL(fileURLWithPath: documentsPath)
+        let fm = FileManager.default
+        let resourceKeys: [URLResourceKey] = [.isDirectoryKey]
+
+        guard let items = try? fm.contentsOfDirectory(at: documentsURL,
+                                                      includingPropertiesForKeys: resourceKeys,
+                                                      options: [.skipsHiddenFiles]) else { return }
+
+        // Existing playlists by name for quick lookup
+        let existingPlaylists = playlists()
+        var nameToPlaylist: [String: VLCMLPlaylist] = [:]
+        for pl in existingPlaylists { nameToPlaylist[pl.name] = pl }
+
+        for url in items {
+            let values = try? url.resourceValues(forKeys: Set(resourceKeys))
+            guard values?.isDirectory == true else { continue }
+
+            let folderName = url.lastPathComponent
+            if folderName.isEmpty { continue }
+
+            // Collect playable media under this folder (recursive)
+            var mediaToAppend: [VLCMLMedia] = []
+            if let enumerator = fm.enumerator(at: url,
+                                              includingPropertiesForKeys: [.isDirectoryKey],
+                                              options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
+                for case let fileURL as URL in enumerator {
+                    let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                    if isDir { continue }
+                    if let mlMedia = medialib.media(withMrl: fileURL) {
+                        let type = mlMedia.type()
+                        if type == .audio || type == .video {
+                            mediaToAppend.append(mlMedia)
+                        }
+                    }
+                }
+            }
+
+            guard !mediaToAppend.isEmpty else { continue }
+
+            let playlist: VLCMLPlaylist
+            if let existing = nameToPlaylist[folderName] {
+                playlist = existing
+            } else if let created = createPlaylist(with: folderName) {
+                playlist = created
+                nameToPlaylist[folderName] = created
+            } else {
+                continue
+            }
+
+            let existingIds = Set(playlist.media?.map { $0.identifier() } ?? [])
+            for item in mediaToAppend where !existingIds.contains(item.identifier()) {
+                _ = playlist.appendMedia(withIdentifier: item.identifier())
+            }
         }
     }
 }
@@ -720,6 +798,8 @@ extension MediaLibraryService {
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didCompleteDiscovery entryPoint: String) {
         didFinishDiscovery = true
+        // Sync folder-based playlists after discovery completes
+        syncFolderPlaylistsFromTopLevelFolders()
     }
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didProgressDiscovery entryPoint: String) {
