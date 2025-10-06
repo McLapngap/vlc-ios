@@ -160,6 +160,10 @@ class MediaLibraryService: NSObject {
 
     @objc var isExcludingFromBackup: Bool = false
     @objc var isHidingLibrary: Bool = false
+    
+    private lazy var folderPlaylistService: FolderPlaylistService = {
+        return FolderPlaylistService(mediaLibraryService: self)
+    }()
 
     override init() {
         super.init()
@@ -442,6 +446,11 @@ private extension MediaLibraryService {
             DispatchQueue.main.async {
                 // Reload in order to make sure that there is no old artifacts left
                 self.reload()
+                
+                // Rescan folders and update playlists
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.folderPlaylistService.scanAndCreatePlaylists()
+                }
             }
         }
     }
@@ -720,6 +729,11 @@ extension MediaLibraryService {
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didCompleteDiscovery entryPoint: String) {
         didFinishDiscovery = true
+        
+        // Scan and create playlists for folders after discovery is complete
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.folderPlaylistService.scanAndCreatePlaylists()
+        }
     }
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didProgressDiscovery entryPoint: String) {
