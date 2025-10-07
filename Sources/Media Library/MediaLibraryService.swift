@@ -552,6 +552,9 @@ extension MediaLibraryService: VLCMediaLibraryDelegate {
             $0.medialibrary?(self, didAddVideos: videos)
             $0.medialibrary?(self, didAddTracks: tracks)
         }
+
+        // Auto-create/update folder-based playlists
+        autoCreateFolderPlaylists(for: media)
     }
 
     func medialibrary(_ medialibrary: VLCMediaLibrary, didModifyMediaWithIds mediaIds: [NSNumber]) {
@@ -600,6 +603,59 @@ extension MediaLibraryService: VLCMediaLibraryDelegate {
         observable.notifyObservers {
             $0.medialibrary?(self, thumbnailReady: media,
                              type: type, success: success)
+        }
+    }
+}
+
+// MARK: - Auto folder playlists
+private extension MediaLibraryService {
+    func autoCreateFolderPlaylists(for media: [VLCMLMedia]) {
+        guard let documentPath = NSSearchPathForDirectoriesInDomains(.documentDirectory, .userDomainMask, true).first else {
+            return
+        }
+
+        for item in media {
+            // Resolve file URL and ensure it belongs to Documents
+            guard let fileURL = item.mainFile()?.mrl, fileURL.isFileURL else { continue }
+            let absolutePath = fileURL.path
+            guard absolutePath.hasPrefix(documentPath) else { continue }
+
+            // Compute top-level folder name under Documents
+            let relativePath = String(absolutePath.dropFirst(documentPath.count))
+            // Split and skip empty components (leading '/')
+            let pathComponents = relativePath.split(separator: "/").map(String.init)
+            // We only create playlists for files inside a folder (not at root)
+            guard pathComponents.count >= 2 else { continue }
+            let topLevelFolderName = pathComponents[0]
+
+            // Skip system/hidden folders
+            if shouldExcludeFolderFromAutoPlaylist(topLevelFolderName) { continue }
+
+            // Find or create the playlist for this folder
+            let playlist: VLCMLPlaylist?
+            if let existing = medialib.searchPlaylists(byName: topLevelFolderName, of: .all)?.first {
+                playlist = existing
+            } else {
+                playlist = createPlaylist(with: topLevelFolderName)
+            }
+
+            guard let safePlaylist = playlist, !safePlaylist.isReadOnly else { continue }
+
+            // Avoid duplicates
+            let alreadyContains = safePlaylist.media?.contains(where: { $0.identifier() == item.identifier() }) ?? false
+            if !alreadyContains {
+                _ = safePlaylist.appendMedia(withIdentifier: item.identifier())
+            }
+        }
+    }
+
+    func shouldExcludeFolderFromAutoPlaylist(_ folderName: String) -> Bool {
+        if folderName.hasPrefix(".") { return true }
+        switch folderName {
+        case "Inbox", "Logs", "MediaLibrary":
+            return true
+        default:
+            return false
         }
     }
 }
